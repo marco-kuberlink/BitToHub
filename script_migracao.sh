@@ -1,27 +1,16 @@
 #!/bin/bash
 
-# Defina as variáveis
-BITBUCKET_WORKSPACE="Nome do Workspace BitBucket"
-ORG_NAME="Nome da Organização GitHub"
+# Variáveis
+BITBUCKET_WORKSPACE="metropoles"
+ORG_NAME="Metropoles"
 REPOS_FILE="repos.txt"
-LOG_FILE="processamento.log"
-SKIP_FILE="repositorios_ignorados.log"
-MAX_PARALLEL=5  # Limite de processos paralelos
+LOG_FILE="${LOG_FILE:-processamento.log}"
+SKIP_FILE="${SKIP_FILE:-repositorios_ignorados.log}"
+MAX_JOBS=5  # Define o número máximo de subprocessos em execução ao mesmo tempo
 
-# Arquivos temporários para contagem
-MIGRATED_COUNT_FILE="migrated_count.tmp"
-UPDATED_COUNT_FILE="updated_count.tmp"
-> "${MIGRATED_COUNT_FILE}"
-> "${UPDATED_COUNT_FILE}"
-
-# Cria os arquivos de log, se não existirem
-touch "${LOG_FILE}"
-touch "${SKIP_FILE}"
-
-# Função para log com timestamp
-log() {
-    echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "${LOG_FILE}"
-}
+# Garantindo que os arquivos de log estão definidos corretamente
+touch "${LOG_FILE}" || { echo "Erro ao criar o arquivo de log."; exit 1; }
+touch "${SKIP_FILE}" || { echo "Erro ao criar o arquivo de repositórios ignorados."; exit 1; }
 
 # Função para verificar se um repositório existe no Bitbucket
 check_bitbucket_repo_exists() {
@@ -39,96 +28,97 @@ check_github_repo_exists() {
 # Função para criar um repositório privado no GitHub
 create_github_repo() {
     local REPO_NAME=$1
-    log "\e[32mIniciando criação do repositório ${REPO_NAME} no GitHub...\e[0m"
-    gh repo create "${ORG_NAME}/${REPO_NAME}" --private --confirm | tee -a "${LOG_FILE}"
-}
-
-# Função para obter o hash do último commit de um repositório remoto
-get_last_commit_hash() {
-    local REPO_URL=$1
-    git ls-remote "${REPO_URL}" HEAD | awk '{print $1}'
+    echo -e "\e[32mIniciando criação do repositório ${REPO_NAME} no GitHub...\e[0m" | tee -a "${LOG_FILE}"
+    gh repo create "${ORG_NAME}/${REPO_NAME}" --private -y | tee -a "${LOG_FILE}"
 }
 
 # Função para verificar se existem arquivos maiores que 100MB
 check_large_files() {
-    find . -type f -size +100M | grep -q .
+    if find . -type f -size +100M | grep -q .; then
+        echo -e "\e[31mRepositório ${REPO_NAME} contém arquivos maiores que 100MB. Ignorando em futuras execuções.\e[0m" | tee -a "${LOG_FILE}"
+        echo "$REPO_NAME" >> "$SKIP_FILE"  # Adiciona o repositório ao final do arquivo SKIP_FILE
+        return 0
+    else
+        return 1
+    fi
 }
 
-# Verifique se o arquivo com a lista de repositórios existe
-if [[ ! -f "${REPOS_FILE}" ]]; then
-    log "Arquivo ${REPOS_FILE} não encontrado."
-    exit 1
-fi
-
-# Função para processar um único repositório
+# Processamento de cada repositório
 process_repo() {
-    local REPO_NAME=$1
+    local REPO_NAME="$1"
+    echo -e "\n[ $(date +'%Y-%m-%d %H:%M:%S') ] Iniciando processamento do repositório ${REPO_NAME}..." | tee -a "${LOG_FILE}"
 
     BITBUCKET_URL="git@bitbucket.org:${BITBUCKET_WORKSPACE}/${REPO_NAME}.git"
     GITHUB_URL="git@github.com:${ORG_NAME}/${REPO_NAME}.git"
 
-    log "\e[34mIniciando processamento do repositório ${REPO_NAME}...\e[0m"
-
     # Ignorar repositórios que já foram marcados com arquivos grandes
     if grep -Fxq "$REPO_NAME" "$SKIP_FILE"; then
-        log "\e[33mIgnorando ${REPO_NAME}: contém arquivos grandes (já registrado).\e[0m"
+        echo -e "\e[33mIgnorando ${REPO_NAME} devido a arquivos grandes (já registrado).\e[0m" | tee -a "${LOG_FILE}"
         return
     fi
 
+    # Verificar existência do repositório no Bitbucket antes de tentar qualquer operação
     if ! check_bitbucket_repo_exists "$REPO_NAME"; then
-        log "\e[31mRepositório ${REPO_NAME} não encontrado no Bitbucket.\e[0m"
+        echo -e "\e[31mRepositório ${REPO_NAME} não encontrado no Bitbucket.\e[0m" | tee -a "${LOG_FILE}"
         return
     fi
 
-    if check_github_repo_exists "$REPO_NAME"; then
-        log "\e[32mRepositório ${ORG_NAME}/${REPO_NAME} já existe no GitHub. Verificando atualização...\e[0m"
-        BITBUCKET_COMMIT_HASH=$(get_last_commit_hash "$BITBUCKET_URL")
-        GITHUB_COMMIT_HASH=$(get_last_commit_hash "$GITHUB_URL")
-        
-        if [[ "$BITBUCKET_COMMIT_HASH" == "$GITHUB_COMMIT_HASH" ]]; then
-            log "\e[32mRepositório ${REPO_NAME} no GitHub já está atualizado.\e[0m"
-            return
-        fi
-
-        # Incrementa contador de repositórios atualizados
-        echo 1 >> "${UPDATED_COUNT_FILE}"
+    # Clonar e verificar o repositório
+    if [[ -d "${REPO_NAME}.git" ]]; then
+        echo -e "\e[33mAtualizando repositório local ${REPO_NAME}.git\e[0m" | tee -a "${LOG_FILE}"
+        cd "${REPO_NAME}.git" || return
+        git fetch --all | tee -a "${LOG_FILE}"
     else
-        # Criar o repositório no GitHub se ele não existir
-        create_github_repo "$REPO_NAME"
-        
-        # Incrementa contador de repositórios migrados
-        echo 1 >> "${MIGRATED_COUNT_FILE}"
+        echo -e "\e[34mClonando ${REPO_NAME} de ${BITBUCKET_URL}\e[0m" | tee -a "${LOG_FILE}"
+        git clone --mirror "${BITBUCKET_URL}" | tee -a "${LOG_FILE}"
+        cd "${REPO_NAME}.git" || { echo -e "\e[31mErro ao acessar diretório ${REPO_NAME}.git\e[0m" | tee -a "${LOG_FILE}"; return; }
     fi
 
-    log "\e[34mClonando ${REPO_NAME} de ${BITBUCKET_URL} para atualização\e[0m"
-    git clone --mirror "${BITBUCKET_URL}" "${REPO_NAME}.git" | tee -a "${LOG_FILE}"
-
-    cd "${REPO_NAME}.git" || { log "\e[31mErro ao acessar diretório ${REPO_NAME}.git\e[0m"; return; }
-
+    # Verificar arquivos grandes antes de prosseguir
     if check_large_files; then
-        log "\e[31mRepositório ${REPO_NAME} contém arquivos maiores que 100MB. Ignorando em futuras execuções.\e[0m"
-        echo "$REPO_NAME" >> "$SKIP_FILE"
-        cd .. && rm -rf "${REPO_NAME}.git"
+        cd .. && rm -rf "${REPO_NAME}.git"  # Remove o repositório local
         return
     fi
 
-    log "\e[32mPushing o repositório ${REPO_NAME} para GitHub...\e[0m"
-    git remote add origin "${GITHUB_URL}"
-    git push --mirror origin | tee -a "${LOG_FILE}"
+    # Sincronizar com o GitHub
+    if check_github_repo_exists "$REPO_NAME"; then
+        BITBUCKET_COMMIT_HASH=$(git ls-remote "$BITBUCKET_URL" HEAD | awk '{print $1}')
+        GITHUB_COMMIT_HASH=$(git ls-remote "$GITHUB_URL" HEAD | awk '{print $1}')
+        if [[ "$BITBUCKET_COMMIT_HASH" != "$GITHUB_COMMIT_HASH" ]]; then
+            echo -e "\e[32mRepositório ${REPO_NAME} no GitHub desatualizado. Atualizando...\e[0m" | tee -a "${LOG_FILE}"
+            git remote remove origin
+            git remote add origin "${GITHUB_URL}"
+            git push --mirror origin | tee -a "${LOG_FILE}"
+        else
+            echo -e "\e[32mRepositório ${REPO_NAME} no GitHub já está atualizado.\e[0m" | tee -a "${LOG_FILE}"
+        fi
+    else
+        create_github_repo "$REPO_NAME"
+        git remote add origin "${GITHUB_URL}"
+        git push --mirror origin | tee -a "${LOG_FILE}"
+    fi
 
     cd .. && rm -rf "${REPO_NAME}.git"
-    log "\e[34mProcessamento do repositório ${REPO_NAME} concluído.\e[0m"
 }
 
-export -f log process_repo check_bitbucket_repo_exists check_github_repo_exists create_github_repo get_last_commit_hash check_large_files
+# Contador de subprocessos em execução
+current_jobs=0
 
-# Processar repositórios em paralelo com limite de subprocessos
-cat "${REPOS_FILE}" | xargs -n 1 -P "${MAX_PARALLEL}" -I {} bash -c 'process_repo "$@"' _ {}
+# Processa cada repositório
+while IFS= read -r REPO_NAME || [[ -n "$REPO_NAME" ]]; do
+    # Executa o processamento em background
+    process_repo "$REPO_NAME" &
 
-# Exibir contagem final de repositórios migrados e atualizados
-MIGRATED_REPOS=$(wc -l < "${MIGRATED_COUNT_FILE}")
-UPDATED_REPOS=$(wc -l < "${UPDATED_COUNT_FILE}")
-log "\e[36mMigração concluída: ${MIGRATED_REPOS} repositórios migrados, ${UPDATED_REPOS} repositórios atualizados.\e[0m"
+    # Incrementa o contador de subprocessos
+    current_jobs=$((current_jobs + 1))
 
-# Limpar arquivos temporários
-rm -f "${MIGRATED_COUNT_FILE}" "${UPDATED_COUNT_FILE}"
+    # Controla o número máximo de jobs simultâneos
+    if [[ "$current_jobs" -ge "$MAX_JOBS" ]]; then
+        # Aguarda todos os subprocessos terminarem antes de continuar
+        wait
+        current_jobs=0
+    fi
+done < "$REPOS_FILE"
+
+# Aguarda que todos os subprocessos finalizem antes de encerrar o script
+wait
