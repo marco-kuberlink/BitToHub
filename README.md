@@ -28,7 +28,7 @@ Este script em Bash é utilizado para sincronizar repositórios entre Bitbucket 
 2. **Criar Arquivos Necessários**: Certifique-se de que `repos.txt` contenha uma lista dos repositórios que deseja sincronizar.
 3. **Execução do Script**: Execute o script no terminal com o comando:
    ```bash
-   ./nome_do_script.sh
+   ./script_migracao.sh
    ```
 4. **Monitoramento**: Acompanhe o arquivo `processamento.log` para verificar o progresso e `repositorios_ignorados.log` para os repositórios ignorados.
 
