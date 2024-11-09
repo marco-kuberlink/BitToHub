@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Variáveis
-BITBUCKET_WORKSPACE="metropoles"
-ORG_NAME="Metropoles"
+BITBUCKET_WORKSPACE="bitbucket_workspace"
+ORG_NAME="Organização_BitBucket"
 REPOS_FILE="repos.txt"
 LOG_FILE="${LOG_FILE:-processamento.log}"
 SKIP_FILE="${SKIP_FILE:-repositorios_ignorados.log}"
