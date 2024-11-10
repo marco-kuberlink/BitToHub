@@ -93,7 +93,7 @@ process_repo() {
             echo -e "\e[32mRepositório ${REPO_NAME} no GitHub já está atualizado.\e[0m" | tee -a "${LOG_FILE}"
         fi
     else
-        create_github_repo "$REPO_NAME"
+        create_github_repo "$REPO_NAME"  # Aguarda a criação do repositório
         git remote add origin "${GITHUB_URL}"
         git push --mirror origin | tee -a "${LOG_FILE}"
     fi
