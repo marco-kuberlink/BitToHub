@@ -25,22 +25,24 @@ check_github_repo_exists() {
     return $?
 }
 
-# Função para criar um repositório privado no GitHub
-create_github_repo() {
+# Função para criar um repositório privado no GitHub e verificar sua criação
+create_and_confirm_github_repo() {
     local REPO_NAME=$1
     echo -e "\e[32mIniciando criação do repositório ${REPO_NAME} no GitHub...\e[0m" | tee -a "${LOG_FILE}"
     gh repo create "${ORG_NAME}/${REPO_NAME}" --private -y | tee -a "${LOG_FILE}"
-}
 
-# Função para verificar se existem arquivos maiores que 100MB
-check_large_files() {
-    if find . -type f -size +100M | grep -q .; then
-        echo -e "\e[31mRepositório ${REPO_NAME} contém arquivos maiores que 100MB. Ignorando em futuras execuções.\e[0m" | tee -a "${LOG_FILE}"
-        echo "$REPO_NAME" >> "$SKIP_FILE"  # Adiciona o repositório ao final do arquivo SKIP_FILE
-        return 0
-    else
-        return 1
-    fi
+    # Verificar até que o repositório esteja disponível no GitHub
+    local MAX_RETRIES=5
+    local COUNT=0
+    while ! check_github_repo_exists "$REPO_NAME"; do
+        if (( COUNT >= MAX_RETRIES )); then
+            echo -e "\e[31mFalha ao criar o repositório ${REPO_NAME} no GitHub após várias tentativas.\e[0m" | tee -a "${LOG_FILE}"
+            return 1
+        fi
+        echo "Aguardando confirmação de criação do repositório no GitHub... (tentativa $((++COUNT)))"
+        sleep 2
+    done
+    return 0
 }
 
 # Processamento de cada repositório
@@ -93,9 +95,12 @@ process_repo() {
             echo -e "\e[32mRepositório ${REPO_NAME} no GitHub já está atualizado.\e[0m" | tee -a "${LOG_FILE}"
         fi
     else
-        create_github_repo "$REPO_NAME"  # Aguarda a criação do repositório
-        git remote add origin "${GITHUB_URL}"
-        git push --mirror origin | tee -a "${LOG_FILE}"
+        if create_and_confirm_github_repo "$REPO_NAME"; then
+            git remote add origin "${GITHUB_URL}"
+            git push --mirror origin | tee -a "${LOG_FILE}"
+        else
+            echo -e "\e[31mFalha ao criar o repositório ${REPO_NAME} no GitHub.\e[0m" | tee -a "${LOG_FILE}"
+        fi
     fi
 
     cd .. && rm -rf "${REPO_NAME}.git"
